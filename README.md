@@ -118,7 +118,7 @@ To trust it, set `app_trusted_keys` to `["XHQYDdKaRZ6pNzXYcrGAB8bTyPa3D22NU+lVzA
 
 ## Releasing an app
 
-The [reusable workflow](.github/workflows/app-build.yml) builds and checks every push and pull request. When a release is published, it attaches `app.wasm` and `manifest.json` to the release. CI never signs. A maintainer signs the CI-built files locally and uploads the package:
+The [reusable workflow](.github/workflows/app-build.yml) builds and checks every push and pull request. When a release is published, it attaches `app.wasm` and `manifest.json` to the release. Only that attach job gets `contents: write`, and only on release events; the build itself runs with a read-only token. CI never signs. A maintainer signs the CI-built files locally and uploads the package:
 
 ```sh
 v=1.0.1                                                    # = manifest version
@@ -128,6 +128,26 @@ python3 sdk/tools/ecapp.py pack dist --key /path/to/key.pem      # -> dist/<name
 python3 sdk/tools/ecapp.py verify dist/<name>-$v.ecapp --pub XHQYDdKaRZ6pNzXYcrGAB8bTyPa3D22NU+lVzAt2Acw=
 gh release upload "v$v" dist/<name>-$v.ecapp
 ```
+
+### Reusable workflow versions
+
+Apps call the workflow at the major tag `v1`, never at `main`:
+
+```yaml
+jobs:
+  build:
+    uses: esp-claw/app-sdk/.github/workflows/app-build.yml@v1
+    permissions:
+      contents: write
+```
+
+`v1` is a moving tag. Maintainers move it to a newer commit on `main` only after CI on that commit is green:
+
+```sh
+git tag -f v1 <commit> && git push -f origin v1
+```
+
+Changes that keep existing app repositories working (bug fixes, pinned action updates, new optional checks) move `v1`. A breaking change, such as new required inputs, a different repository layout or stricter checks that existing apps fail, gets a new major tag `v2`. App repositories then switch to `@v2` on their own schedule. All actions inside the workflow are pinned to commit SHAs, and Dependabot proposes updates.
 
 ## Install on the device
 

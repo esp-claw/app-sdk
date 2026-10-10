@@ -1,11 +1,14 @@
 # Reusable build for app repositories. Call it from the app's .github/workflows/build.yml:
 #
 #   on: { push: {}, pull_request: {}, release: { types: [published] } }
+#   permissions: {}
 #   jobs:
 #     build:
-#       uses: esp-claw/app-sdk/.github/workflows/app-build.yml@main
+#       uses: esp-claw/app-sdk/.github/workflows/app-build.yml@v1
 #       permissions:
-#         contents: write
+#         contents: write   # ceiling only: the build job runs read-only, the release job (release events only) writes
+#
+# Call it at the moving major tag @v1, not @main (see "Reusable workflow versions" in the app-sdk README).
 #
 # Expects the app at the repository root with this SDK as the submodule `sdk` (its tools are used,
 # so the checks match the pinned SDK). Builds build/{app.wasm,manifest.json}, checks both and uploads
@@ -15,15 +18,17 @@
 name: app-build
 on:
   workflow_call:
+permissions: {}
 jobs:
   build:
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           submodules: true
+          persist-credentials: false
       - name: check the sdk submodule
         run: |
           test -f sdk/tools/wasm_check.py || {
@@ -37,19 +42,32 @@ jobs:
         run: ./sdk/build-app.sh .
       - name: wasm module
         run: python3 sdk/tools/wasm_check.py build
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: app
           path: |
             build/app.wasm
             build/manifest.json
+
+  # Separate job so that only this one, and only on release events, holds contents: write.
+  release:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: app
+          path: build
       - name: attach to release
-        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          version=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
+          version=$(python3 -c 'import json; print(json.load(open("build/manifest.json"))["version"])')
           if [ "$TAG" != "v$version" ]; then
             echo "::error::release tag $TAG does not match manifest version (expected v$version)"
             exit 1
