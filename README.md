@@ -9,6 +9,7 @@ build-app.sh              builds <app>/build/{app.wasm,manifest.json}
 tools/ecapp.py            packs, signs and verifies .ecapp packages; prints public keys
 tools/manifest_check.py   checks manifest.json against the firmware's rules
 tools/wasm_check.py       checks a built app.wasm: imports, exports, memory, size
+tools/device_test.sh      install/update/remove test steps for a flashed device (signed packages)
 examples/minimal/         smallest app: one tool, minimal_ping, returns "pong"
 tests/selftest.sh         SDK self-test (run by CI)
 .github/workflows/app-build.yml   reusable build + check workflow for app repositories
