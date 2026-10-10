@@ -8,7 +8,7 @@
 Checks: wasm magic/version and size (<= 256 KB, CAP_WASM_WASM_MAX); every import is a function from
 module "claw" declared in include/claw.h, and its permission is granted by the manifest (mirrors
 cap_wasm_host_import_perm() in esp-claw cap_wasm_host.c); exports app_init/app_alloc/tool_call with
-the right signatures; no __heap_base/__data_end/__stack_pointer export; exactly one memory, not
+the right signatures, and on_timer with permission "timer"; no __heap_base/__data_end/__stack_pointer export; exactly one memory, not
 imported, with initial == maximum == limits.memory_kb. No dependencies besides Python 3.
 """
 import json
@@ -23,7 +23,9 @@ EXPORTS = {"app_init": ((), ()), "app_alloc": ((I32,), (I32,)), "tool_call": ((I
 FORBIDDEN_EXPORTS = {"__heap_base", "__data_end", "__stack_pointer"}
 # Host function -> manifest permission; functions not listed need none (cap_wasm_host.c).
 IMPORT_PERMS = {"log": "log", "kv_get": "kv", "kv_set": "kv", "kv_del": "kv", "confirm": "confirm",
-                "ping": "ping", "http_profile_request": "http_profiles", "http_response_read": "http_profiles"}
+                "ping": "ping", "http_profile_request": "http_profiles", "http_response_read": "http_profiles",
+                "timer_set": "timer", "notify": "notify"}
+TIMER_EXPORT = ("on_timer", ((), ()))
 KINDS = {0: "function", 1: "table", 2: "memory", 3: "global", 4: "tag"}
 
 
@@ -120,6 +122,7 @@ def check(data, manifest, declared):
         return errors + [f"cannot parse app.wasm: {e}"]
     perms = manifest.get("permissions") or {}
     granted = {k for k, v in perms.items() if v is True} | ({"http_profiles"} if perms.get("http_profiles") else set())
+    granted |= {"timer"} if isinstance(perms.get("timer"), dict) else set()
 
     func_types = []
     for mod, field, kind, desc in m["imports"]:
@@ -137,7 +140,8 @@ def check(data, manifest, declared):
     func_types += m["funcs"]
 
     exports = {name: (kind, idx) for name, kind, idx in m["exports"]}
-    for name, sig in EXPORTS.items():
+    required = dict(EXPORTS, **dict([TIMER_EXPORT])) if "timer" in granted else EXPORTS
+    for name, sig in required.items():
         kind, idx = exports.get(name, (None, None))
         if kind != 0:
             errors.append(f"missing function export '{name}'")

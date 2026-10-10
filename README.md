@@ -34,7 +34,7 @@ The linear memory is sized from `limits.memory_kb`. If you get link errors about
 `wasm_check.py` rejects the following:
 - any import that is not a function of module `claw` declared in `claw.h`
 - a host function whose permission the manifest does not grant
-- missing or mistyped `app_init` / `app_alloc` / `tool_call` exports
+- missing or mistyped `app_init` / `app_alloc` / `tool_call` exports (and `on_timer` with permission `timer`)
 - an exported `__heap_base` / `__data_end` / `__stack_pointer`
 - a memory whose initial or maximum size differs from `limits.memory_kb`
 - a module larger than 256 KB
@@ -44,6 +44,12 @@ The firmware refuses all of these at load time, so CI catches them first.
 ## App contract
 
 The app exports three functions. `app_init()` registers tools with `claw_tool_register()`. `app_alloc(size)` returns a buffer for the next call's argument JSON (`CLAW_DEFINE_ARENA()` provides one). `tool_call(tool, args, len)` handles a call: it sets the result with `claw_tool_result()` and returns 0. See the comments in `include/claw.h` and `examples/minimal/main.c`.
+
+### Timers and notifications
+
+An app with permission `timer` exports `void on_timer(void)` and starts its timer with `claw_timer_set(interval_s)` (at least `min_interval_s`; 0 cancels). The device stores the schedule, so it survives reboots and idle unloads: when the timer is due, the device loads the app and calls `on_timer()` under `limits.call_timeout_ms`. Timers of at least an hour keep their last run across reboots; shorter ones restart their interval at boot. Calling `claw_timer_set()` with the current interval keeps the schedule, so `app_init` may set it on every load. At most 4 apps can have a timer. After 3 consecutive traps or timeouts the timer stops and the allowed Telegram users get a message; `/apps reload <name>` starts it again. `/apps` shows the interval, the next run and failures.
+
+`on_timer()` has no Telegram chat: `claw_confirm()` returns `-CLAW_ENOTSUP` and HTTP mutations (which need a confirmation) are refused. To tell the user something, use permission `notify` and `claw_notify(text)`: it sends `` 📣 App `<name>`: <text> `` to the device's allowed Telegram users, at most 10 messages per hour per app.
 
 The LLM sees each tool as `<app>_<tool>` in the capability group `cap_wasm_apps`. That group is LLM-visible by default. If `llm_visible_cap_groups` is set explicitly, add `cap_wasm_apps` to it. Tool names are at most 48 chars including the prefix, and the device allows at most 32 app tools in total.
 
@@ -68,7 +74,8 @@ The LLM sees each tool as `<app>_<tool>` in the capability group `cap_wasm_apps`
 | `name` | required, 1-24 chars `[a-z0-9_]`, starts with a letter; the app's directory on the device (`apps/<name>/`) and its tool prefix |
 | `version` | required, 1-16 chars, `MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]` |
 | `description` | optional, <= 200 bytes |
-| `permissions.log` / `kv` / `confirm` / `ping` | optional booleans, default false |
+| `permissions.log` / `kv` / `confirm` / `ping` / `notify` | optional booleans, default false |
+| `permissions.timer` | optional object `{"min_interval_s": N}`, N 60-604800 (default 60); requires the export `on_timer` |
 | `permissions.http_profiles` | optional, 1-4 distinct names (`[A-Za-z0-9_-]`, <= 31 chars) of `api_profiles` entries on the device |
 | `limits.memory_kb` | linear memory cap, multiple of 64, 64-512, default 64 |
 | `limits.call_timeout_ms` | budget per tool call, 100-30000, default 5000 (`app_init`: fixed 2000) |

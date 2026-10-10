@@ -15,6 +15,9 @@
  *            `tool` is the index returned by claw_tool_register(), `args` the JSON arguments the
  *            LLM passed (NUL-terminated, `len` excludes the NUL). Call claw_tool_result() once and
  *            return 0, or return non-zero for an error. Budget: limits.call_timeout_ms (5 s).
+ * With permission "timer" it must also export
+ *   void     on_timer(void)                                  runs every claw_timer_set() interval
+ *            (same budget as tool_call; no Telegram chat, so claw_confirm() and HTTP mutations fail).
  *
  * Host functions return >= 0 on success and -CLAW_E* on failure. Every pointer/length pair is
  * bounds-checked by the host; an out-of-bounds buffer traps the call. A host function the
@@ -80,7 +83,7 @@ CLAW_IMPORT("config_get") int32_t claw_config_get(const char *key, uint32_t key_
  * https URL on the profile's hosts; `headers_json` a JSON object of strings or empty; `body` empty for
  * GET. Mutations (non-GET/HEAD) ask the user in Telegram and only work for requests from Telegram.
  * Returns the HTTP status or -errno. The response body (<= 32 KB; on error the error text) is read with
- * claw_http_response_read(), which returns the bytes copied and 0 at the end. Only in tool_call. */
+ * claw_http_response_read(), which returns the bytes copied and 0 at the end. Only in tool_call and on_timer. */
 CLAW_IMPORT("http_profile_request") int32_t claw_http_profile_request(const char *profile, uint32_t profile_len,
                                                                       const char *method, uint32_t method_len,
                                                                       const char *path_or_url, uint32_t url_len,
@@ -95,8 +98,22 @@ CLAW_IMPORT("confirm") int32_t claw_confirm(const char *text, uint32_t len);
 /* permission "ping": sends `count` (1-10) ICMP echo requests to a host name or IPv4/IPv6 literal
  * ([A-Za-z0-9.:-]) and writes a JSON summary to out:
  * {"host","ip","sent","received","rtt_ms":{"min","avg","max"}} (rtt_ms only with replies).
- * Returns its length, -CLAW_ENOENT (unknown host), -CLAW_EINVAL or -CLAW_ENOBUFS. Only in tool_call. */
+ * Returns its length, -CLAW_ENOENT (unknown host), -CLAW_EINVAL or -CLAW_ENOBUFS. Only in tool_call/on_timer. */
 CLAW_IMPORT("ping") int32_t claw_ping(const char *host, uint32_t host_len, int32_t count, char *out, uint32_t out_cap);
+
+/* permission "timer": {"min_interval_s": N} (N >= 60, default 60). Runs on_timer() every
+ * `interval_s` seconds (N .. 604800), or cancels the timer with 0. The schedule is stored on the device
+ * and survives reboots and idle unloads: the device loads the app when the timer is due. Setting the
+ * current interval again keeps the schedule, so calling this in app_init (which runs on every load) is
+ * fine. Timers run one at a time with about 15 s resolution; after 3 consecutive traps/timeouts the
+ * timer stops until /apps reload or reboot. Returns 0, -CLAW_EINVAL (interval out of range) or
+ * -CLAW_ENOSPC (4 apps have a timer already). */
+CLAW_IMPORT("timer_set") int32_t claw_timer_set(int32_t interval_s);
+
+/* permission "notify": sends `text` (1-1000 bytes, Markdown) to the device's allowed Telegram users,
+ * prefixed with "📣 App `<name>`:". At most 10 messages per hour per app. Only in tool_call and
+ * on_timer. Returns 0, -CLAW_ENOSPC (hourly limit), -CLAW_ENOTSUP (no Telegram), -CLAW_EIO, -CLAW_EPERM. */
+CLAW_IMPORT("notify") int32_t claw_notify(const char *text, uint32_t len);
 
 /* Unix time in ms (before SNTP sync this is close to 0). */
 CLAW_IMPORT("now_ms") int64_t claw_now_ms(void);
@@ -121,6 +138,7 @@ static inline uint32_t claw_strlen(const char *s)
 #define CLAW_LOG(level, s)        claw_log((level), CLAW_S(s))
 #define CLAW_REGISTER(n, d, s)    claw_tool_register(CLAW_S(n), CLAW_S(d), CLAW_S(s))
 #define CLAW_RESULT(s)            claw_tool_result(CLAW_S(s))
+#define CLAW_NOTIFY(s)            claw_notify(CLAW_S(s))
 
 /* Single static buffer as app_alloc(): define CLAW_ARENA_SIZE (the largest accepted argument JSON)
  * before including claw.h and use CLAW_DEFINE_ARENA() once. Args are only valid during tool_call. */

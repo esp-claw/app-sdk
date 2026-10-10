@@ -52,6 +52,8 @@ test_manifest() {
         '{"name":"cf","version":"1.2.3-rc.1+b5","description":"","permissions":{"log":false,"kv":true,"confirm":true,"ping":true,"http_profiles":["cloudflare","a-b_C"]},"limits":{"memory_kb":512,"call_timeout_ms":100}}'
         '{"name":"abcdefghijklmnopqrstuvwx","version":"1.0.0","limits":{"memory_kb":64.0,"call_timeout_ms":30000}}'
         '{"name":"a","version":"1.0.0","settings":[]}'
+        '{"name":"a","version":"1.0.0","permissions":{"notify":true,"timer":{}}}'
+        '{"name":"a","version":"1.0.0","permissions":{"notify":false,"timer":{"min_interval_s":604800}}}'
         '{"name":"a","version":"1.0.0","settings":[{"key":"city","type":"string","default":"Wien","description":"x"},{"key":"token","type":"string","secret":true},{"key":"n","type":"int","default":-2147483648},{"key":"abcdefghijklmno","type":"bool","default":false,"secret":false}]}'
     )
     local badm=(
@@ -69,6 +71,11 @@ test_manifest() {
         '{"name":"a","version":"1.0.0","limits":{"memory_kb":true}}' '{"name":"a","version":"1.0.0","limits":{"call_timeout_ms":99}}'
         '{"name":"a","version":"1.0.0","limits":{"call_timeout_ms":30001}}' '{"name":"a","version":"1.0.0","limits":{"stack_kb":8}}'
         "{\"name\":\"a\",\"version\":\"1.0.0\",\"description\":\"$(printf 'x%.0s' $(seq 201))\"}"
+        '{"name":"a","version":"1.0.0","permissions":{"timer":true}}'
+        '{"name":"a","version":"1.0.0","permissions":{"timer":{"min_interval_s":59}}}'
+        '{"name":"a","version":"1.0.0","permissions":{"timer":{"min_interval_s":604801}}}'
+        '{"name":"a","version":"1.0.0","permissions":{"timer":{"interval_s":60}}}'
+        '{"name":"a","version":"1.0.0","permissions":{"notify":1}}'
         '{"name":"a","version":"1.0.0","settings":{}}' '{"name":"a","version":"1.0.0","settings":[{"type":"int"}]}'
         '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"float"}]}'
         '{"name":"a","version":"1.0.0","settings":[{"key":"_a","type":"int"}]}'
@@ -115,6 +122,16 @@ test_wasm() {
     echo '{"name":"t","version":"1.0.0","permissions":{"log":true}}' > "$d/manifest.json"
     expect_ok "claw.log with permission log accepted" python3 "$sdk/tools/wasm_check.py" "$d"
     echo '{"name":"t","version":"1.0.0"}' > "$d/manifest.json"
+
+    printf '#include "claw.h"\nvoid use_timer(void) { claw_timer_set(60); }\n' > "$tmp/timer.c"
+    wasm_cc "${ld[@]}" -Wl,--export=use_timer -o "$d/app.wasm" "$src" "$tmp/timer.c"
+    echo '{"name":"t","version":"1.0.0","permissions":{"timer":{}}}' > "$d/manifest.json"
+    expect_fail "permission timer without on_timer export" python3 "$sdk/tools/wasm_check.py" "$d"
+    printf '#include "claw.h"\nvoid use_timer(void) { claw_timer_set(60); }\nCLAW_EXPORT("on_timer") void on_timer(void) {}\n' > "$tmp/timer.c"
+    wasm_cc "${ld[@]}" -Wl,--export=use_timer -o "$d/app.wasm" "$src" "$tmp/timer.c"
+    expect_ok "permission timer with on_timer accepted" python3 "$sdk/tools/wasm_check.py" "$d"
+    echo '{"name":"t","version":"1.0.0"}' > "$d/manifest.json"
+    expect_fail "claw.timer_set without permission timer" python3 "$sdk/tools/wasm_check.py" "$d"
 
     printf 'int env_fn(void);\nint use_env(void) { return env_fn(); }\n' > "$tmp/env.c"
     wasm_cc "${ld[@]}" -Wl,--allow-undefined -Wl,--export=use_env -o "$d/app.wasm" "$src" "$tmp/env.c"

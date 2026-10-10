@@ -34,8 +34,9 @@ SETTING_DESC_MAX = 100       # CAP_WASM_SETTING_DESC_MAX (bytes)
 INT32 = (-2**31, 2**31 - 1)
 
 KEYS = {"name", "version", "description", "permissions", "limits", "settings"}
-BOOL_PERMS = {"log", "kv", "confirm", "ping"}
-PERMS = BOOL_PERMS | {"http_profiles"}
+BOOL_PERMS = {"log", "kv", "confirm", "ping", "notify"}
+PERMS = BOOL_PERMS | {"http_profiles", "timer"}
+TIMER_MIN_S = (60, 7 * 24 * 3600)  # CAP_WASM_TIMER_MIN_S .. CAP_WASM_TIMER_MAX_S
 LIMIT_KEYS = {"memory_kb", "call_timeout_ms"}
 SETTING_KEYS = {"key", "type", "default", "secret", "description"}
 SETTING_TYPES = {"string", "int", "bool"}
@@ -123,6 +124,16 @@ def check(manifest, dir_name=None):
             errors += [f"unknown permission '{k}'" for k in perms if k not in PERMS]
             errors += [f"permissions.{k} must be a boolean"
                        for k in sorted(BOOL_PERMS) if k in perms and not isinstance(perms[k], bool)]
+            timer = perms.get("timer")
+            if timer is not None:
+                if not isinstance(timer, dict):
+                    errors.append("permissions.timer must be an object")
+                else:
+                    errors += [f"unknown permissions.timer key '{k}'" for k in timer if k != "min_interval_s"]
+                    v = timer.get("min_interval_s")
+                    if v is not None and (not is_int(v) or not TIMER_MIN_S[0] <= v <= TIMER_MIN_S[1]):
+                        errors.append("permissions.timer.min_interval_s must be an integer in "
+                                      f"[{TIMER_MIN_S[0]}, {TIMER_MIN_S[1]}]")
             profiles = perms.get("http_profiles")
             if profiles is not None:
                 if not isinstance(profiles, list) or not 1 <= len(profiles) <= MAX_PROFILES:
