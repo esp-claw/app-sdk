@@ -1,0 +1,57 @@
+# Reusable build for app repositories. Call it from the app's .github/workflows/build.yml:
+#
+#   on: { push: {}, pull_request: {}, release: { types: [published] } }
+#   jobs:
+#     build:
+#       uses: esp-claw/app-sdk/.github/workflows/app-build.yml@main
+#       permissions:
+#         contents: write
+#
+# Expects the app at the repository root with this SDK as the submodule `sdk` (its tools are used,
+# so the checks match the pinned SDK). Builds build/{app.wasm,manifest.json}, checks both and uploads
+# them as the artifact `app`. On a published release whose tag is v<manifest version> it attaches both
+# files to the release. Signing is not done here: maintainers sign locally with sdk/tools/ecapp.py and
+# upload the .ecapp (see the app-sdk README).
+name: app-build
+on:
+  workflow_call:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: check the sdk submodule
+        run: |
+          test -f sdk/tools/wasm_check.py || {
+            echo "::error::sdk submodule has no tools/ - update it: git submodule update --remote sdk"
+            exit 1
+          }
+      - run: sudo apt-get update && sudo apt-get install -y clang lld python3
+      - name: manifest
+        run: python3 sdk/tools/manifest_check.py manifest.json
+      - name: build
+        run: ./sdk/build-app.sh .
+      - name: wasm module
+        run: python3 sdk/tools/wasm_check.py build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: |
+            build/app.wasm
+            build/manifest.json
+      - name: attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::release tag $TAG does not match manifest version (expected v$version)"
+            exit 1
+          fi
+          gh release upload "$TAG" build/app.wasm build/manifest.json --clobber

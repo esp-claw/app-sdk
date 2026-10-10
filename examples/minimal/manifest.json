@@ -1,0 +1,9 @@
+{
+  "name": "minimal",
+  "version": "1.0.0",
+  "description": "SDK example: one tool, minimal_ping, that returns \"pong\".",
+  "limits": {
+    "memory_kb": 64,
+    "call_timeout_ms": 1000
+  }
+}

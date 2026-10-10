@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck
+      - name: ruff
+        run: pipx run ruff==0.15.12 check tools/
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang lld
+      - name: headers compile standalone for wasm32
+        run: tests/selftest.sh headers
+      - name: build and check examples/minimal
+        run: tests/selftest.sh example
+      - name: manifest_check.py cases
+        run: tests/selftest.sh manifest
+      - name: wasm_check.py cases
+        run: tests/selftest.sh wasm
+      - name: ecapp.py round trip (throwaway key)
+        run: tests/selftest.sh ecapp
+      - name: ecapp.py round trip without the cryptography package (openssl fallback)
+        run: |
+          python3 -m venv --without-pip "$RUNNER_TEMP/bare"
+          PATH="$RUNNER_TEMP/bare/bin:$PATH" tests/selftest.sh ecapp
