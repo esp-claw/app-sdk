@@ -37,7 +37,7 @@ jobs:
         run: ./sdk/build-app.sh .
       - name: wasm module
         run: python3 sdk/tools/wasm_check.py build
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: app
           path: |
