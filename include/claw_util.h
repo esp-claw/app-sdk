@@ -81,7 +81,7 @@ static inline void cb_put_escaped(claw_buf_t *b, const char *s, uint32_t n)
 
 static inline const char *cj_ws(const char *p, const char *end)
 {
-    while (p < end && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) {
+    while (p && p < end && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) {
         p++;
     }
     return p;
@@ -94,7 +94,7 @@ static inline const char *cj_skip(const char *p, const char *end)
 
     p = cj_ws(p, end);
     do {
-        if (p >= end) {
+        if (!p || p >= end) {
             return 0;
         }
         if (*p == '"') {
@@ -103,7 +103,7 @@ static inline const char *cj_skip(const char *p, const char *end)
                     p++;
                 }
             }
-            if (p >= end) {
+            if (!p || p >= end) {
                 return 0;
             }
         } else if (*p == '{' || *p == '[') {
@@ -127,7 +127,7 @@ static inline const char *cj_member(const char *obj, const char *end, const char
     uint32_t klen = claw_strlen(key);
     const char *p = cj_ws(obj, end);
 
-    if (p >= end || *p != '{') {
+    if (!p || p >= end || *p != '{') {
         return 0;
     }
     for (p = cj_ws(p + 1, end); p && p < end && *p == '"'; p = cj_ws(p, end)) {

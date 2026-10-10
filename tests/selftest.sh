@@ -26,6 +26,8 @@ expect_fail() { # expect_fail <label> <cmd...>: the command must exit non-zero
 wasm_cc() { "$CC" --target=wasm32 -mcpu=mvp -mbulk-memory -O2 -nostdlib -ffreestanding -I "$sdk/include" "$@"; }
 
 test_headers() {
+    expect_ok "JSON null regression compile" "$CC" -Wno-unknown-attributes -fsanitize=undefined,address -I "$sdk/include" "$sdk/tests/json_null.c" -o "$tmp/json_null"
+    expect_ok "JSON null regression run" "$tmp/json_null"
     echo "headers: each compiles standalone for wasm32 with -Wall -Wextra -Werror -std=c11"
     for h in claw.h claw_util.h; do
         printf '#include "%s"\nint claw_tu_not_empty;\n' "$h" > "$tmp/tu.c"
