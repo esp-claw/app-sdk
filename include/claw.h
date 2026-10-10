@@ -67,6 +67,14 @@ CLAW_IMPORT("kv_get") int32_t claw_kv_get(const char *key, uint32_t key_len, voi
 CLAW_IMPORT("kv_set") int32_t claw_kv_set(const char *key, uint32_t key_len, const void *val, uint32_t val_len);
 CLAW_IMPORT("kv_del") int32_t claw_kv_del(const char *key, uint32_t key_len);
 
+/* No permission needed. Reads a setting declared in manifest.json "settings", as text: strings as
+ * set, ints in decimal ("-5"), bools as "true"/"false". The user sets values with
+ * "/app config <app> <key> <value>" in Telegram; unset settings fall back to their "default".
+ * Not NUL-terminated. Returns the length (<= 256), -CLAW_EPERM for a key the manifest does not
+ * declare, -CLAW_ENOENT when unset without a default, -CLAW_ENOBUFS when out_cap is too small.
+ * Read settings when you need them: the user can change them at any time. */
+CLAW_IMPORT("config_get") int32_t claw_config_get(const char *key, uint32_t key_len, char *out, uint32_t out_cap);
+
 /* permission "http_profiles": request through a device credential profile listed in the manifest
  * (the device injects auth). `path_or_url` is "/path" (appended to the profile's base_url) or a full
  * https URL on the profile's hosts; `headers_json` a JSON object of strings or empty; `body` empty for

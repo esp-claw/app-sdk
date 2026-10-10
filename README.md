@@ -55,7 +55,11 @@ The LLM sees each tool as `<app>_<tool>` in the capability group `cap_wasm_apps`
   "version": "1.0.0",
   "description": "shown in /apps and apps_status",
   "permissions": { "log": true, "kv": true, "http_profiles": ["cloudflare"], "confirm": true, "ping": true },
-  "limits": { "memory_kb": 64, "call_timeout_ms": 5000 }
+  "limits": { "memory_kb": 64, "call_timeout_ms": 5000 },
+  "settings": [
+    { "key": "zone", "type": "string", "default": "example.com", "description": "DNS zone to manage" },
+    { "key": "api_token", "type": "string", "secret": true, "description": "Cloudflare API token" }
+  ]
 }
 ```
 
@@ -68,6 +72,29 @@ The LLM sees each tool as `<app>_<tool>` in the capability group `cap_wasm_apps`
 | `permissions.http_profiles` | optional, 1-4 distinct names (`[A-Za-z0-9_-]`, <= 31 chars) of `api_profiles` entries on the device |
 | `limits.memory_kb` | linear memory cap, multiple of 64, 64-512, default 64 |
 | `limits.call_timeout_ms` | budget per tool call, 100-30000, default 5000 (`app_init`: fixed 2000) |
+| `settings` | optional, at most 8 user settings, see below |
+
+### Settings
+
+Each `settings` entry declares one value the user configures on the device:
+
+| field | rule |
+|---|---|
+| `key` | required, 1-15 chars `[a-z0-9_]`, starts with a letter, unique |
+| `type` | required, `string`, `int` (int32) or `bool` |
+| `default` | optional, of that type; strings 1-64 bytes. Not allowed for secrets |
+| `secret` | optional boolean. Secret values are never shown to the LLM and are masked in `/app config` |
+| `description` | optional, <= 100 bytes, shown in `/app config` and to the LLM |
+
+The user sets values in Telegram, only with the slash command (the LLM cannot change settings; its `apps_config` tool lists them without secret values):
+
+```
+/app config <app>                    list settings (secrets as "•••• (set, N chars)")
+/app config <app> <key> <value>      set (strings up to 256 bytes; bool: true/false, on/off, yes/no, 1/0)
+/app config <app> <key> --reset      back to the default (or unset)
+```
+
+The app reads a value with `claw_config_get()` as text. Values are kept when the app is updated. Values of keys the new manifest no longer declares, or that no longer fit a changed type, are dropped. `/app remove` deletes them.
 
 The device rejects an app with unknown keys or permissions. It also rejects an app that imports a host function its manifest does not grant. `tools/manifest_check.py` mirrors `cap_wasm_manifest.c` in the firmware. Its header comment lists the source files to compare when the firmware changes.
 
@@ -157,7 +184,8 @@ Host the `.ecapp` on any https URL, for example a GitHub release, then send in T
 /app install <https-url>            download (<= 512 KB), verify, confirm, install
 /app install --force <https-url>    same, but allows a lower version than installed
 /app update <name> [https-url]      update; without a URL, from where it was installed
-/app remove <name>                  delete the app, its files and its key-value data
+/app remove <name>                  delete the app, its files, key-value data and settings
+/app config <name> [<key> <value>|<key> --reset]   list or change the app's settings
 /apps                               list: version, state, key, PSRAM, last use, tools, last error
 /apps enable|disable <name>         persisted; disabled apps have no tools
 /apps load|unload <name>            load into / free from memory now

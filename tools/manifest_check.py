@@ -6,7 +6,8 @@
   manifest_check.py <manifest.json | app_dir> [--dir-name NAME]
 
 Keep in sync with the firmware (esp-claw, components/claw_capabilities/cap_wasm_apps/src/):
-  cap_wasm_manifest.c  cap_wasm_manifest_parse(), cap_wasm_parse_permissions(), cap_wasm_name_valid()
+  cap_wasm_manifest.c  cap_wasm_manifest_parse(), cap_wasm_parse_permissions(), cap_wasm_parse_settings(),
+                       cap_wasm_name_valid()
   cap_wasm_manifest.h  CAP_WASM_*_MAX / _MIN / _DEFAULT limits
   cap_wasm_pkg.c/.h    cap_wasm_version_parse() (installer version order), CAP_WASM_MANIFEST_MAX
 --dir-name additionally checks that name equals the device directory apps/<name>/ (the installer
@@ -26,11 +27,18 @@ PROFILE_NAME_MAX = 31        # CAP_WASM_PROFILE_NAME_MAX
 MAX_PROFILES = 4             # CAP_WASM_MAX_PROFILES
 MEMORY_KB = (64, 512)        # 64 .. CAP_WASM_MEMORY_KB_MAX, multiple of 64
 CALL_MS = (100, 30000)       # CAP_WASM_CALL_MS_MIN .. CAP_WASM_CALL_MS_MAX
+MAX_SETTINGS = 8             # CAP_WASM_MAX_SETTINGS
+SETTING_KEY_MAX = 15         # CAP_WASM_SETTING_KEY_MAX (NVS key limit)
+SETTING_DEFAULT_MAX = 64     # CAP_WASM_SETTING_DEFAULT_MAX (bytes)
+SETTING_DESC_MAX = 100       # CAP_WASM_SETTING_DESC_MAX (bytes)
+INT32 = (-2**31, 2**31 - 1)
 
-KEYS = {"name", "version", "description", "permissions", "limits"}
+KEYS = {"name", "version", "description", "permissions", "limits", "settings"}
 BOOL_PERMS = {"log", "kv", "confirm", "ping"}
 PERMS = BOOL_PERMS | {"http_profiles"}
 LIMIT_KEYS = {"memory_kb", "call_timeout_ms"}
+SETTING_KEYS = {"key", "type", "default", "secret", "description"}
+SETTING_TYPES = {"string", "int", "bool"}
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 VERSION_CHARS_RE = re.compile(r"^[A-Za-z0-9.+-]+$")
@@ -41,6 +49,44 @@ PROFILE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 def is_int(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool) and float(v).is_integer()
+
+
+def check_settings(settings):
+    """cap_wasm_parse_settings(): returns a list of error strings."""
+    if not isinstance(settings, list) or len(settings) > MAX_SETTINGS:
+        return [f"settings must be an array of at most {MAX_SETTINGS} entries"]
+    errors, seen = [], set()
+    for s in settings:
+        if not isinstance(s, dict):
+            errors.append("settings entries must be objects")
+            continue
+        errors += [f"unknown settings key '{k}'" for k in s if k not in SETTING_KEYS]
+        key, typ, default = s.get("key"), s.get("type"), s.get("default")
+        if not isinstance(key, str) or not key or len(key) > SETTING_KEY_MAX or not NAME_RE.match(key):
+            errors.append(f"settings key {key!r} must be 1-{SETTING_KEY_MAX} chars of [a-z0-9_] starting with a letter")
+        elif key in seen:
+            errors.append(f"settings lists '{key}' twice")
+        seen.add(key)
+        desc = s.get("description")
+        if desc is not None and (not isinstance(desc, str) or len(desc.encode()) > SETTING_DESC_MAX):
+            errors.append(f"settings[].description must be a string of 0/1-{SETTING_DESC_MAX} bytes")
+        if typ not in SETTING_TYPES:
+            errors.append(f"settings '{key}': type must be string, int or bool")
+            continue
+        if "secret" in s and not isinstance(s["secret"], bool):
+            errors.append(f"settings '{key}': secret must be a boolean")
+        if "default" not in s:
+            continue
+        if s.get("secret") is True:
+            errors.append(f"settings '{key}': a secret cannot have a default")
+        elif typ == "string" and not (isinstance(default, str) and 0 < len(default.encode()) <= SETTING_DEFAULT_MAX
+                                      and not any(ord(c) < 0x20 or c == "\x7f" for c in default)):
+            errors.append(f"settings '{key}': default must be a string of 1-{SETTING_DEFAULT_MAX} bytes")
+        elif typ == "int" and not (is_int(default) and INT32[0] <= default <= INT32[1]):
+            errors.append(f"settings '{key}': default must be an int32")
+        elif typ == "bool" and not isinstance(default, bool):
+            errors.append(f"settings '{key}': default must be a boolean")
+    return errors
 
 
 def check(manifest, dir_name=None):
@@ -102,6 +148,8 @@ def check(manifest, dir_name=None):
             mem = limits.get("memory_kb")
             if is_int(mem) and MEMORY_KB[0] <= mem <= MEMORY_KB[1] and mem % 64:
                 errors.append("limits.memory_kb must be a multiple of 64 (one WASM page)")
+    if "settings" in manifest:
+        errors += check_settings(manifest["settings"])
     return errors
 
 

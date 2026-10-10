@@ -51,6 +51,8 @@ test_manifest() {
         '{"name":"a","version":"0.0.1"}'
         '{"name":"cf","version":"1.2.3-rc.1+b5","description":"","permissions":{"log":false,"kv":true,"confirm":true,"ping":true,"http_profiles":["cloudflare","a-b_C"]},"limits":{"memory_kb":512,"call_timeout_ms":100}}'
         '{"name":"abcdefghijklmnopqrstuvwx","version":"1.0.0","limits":{"memory_kb":64.0,"call_timeout_ms":30000}}'
+        '{"name":"a","version":"1.0.0","settings":[]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"city","type":"string","default":"Wien","description":"x"},{"key":"token","type":"string","secret":true},{"key":"n","type":"int","default":-2147483648},{"key":"abcdefghijklmno","type":"bool","default":false,"secret":false}]}'
     )
     local badm=(
         '[]' '{"version":"1.0.0"}' '{"name":"a"}' '{"name":"","version":"1.0.0"}'
@@ -67,6 +69,18 @@ test_manifest() {
         '{"name":"a","version":"1.0.0","limits":{"memory_kb":true}}' '{"name":"a","version":"1.0.0","limits":{"call_timeout_ms":99}}'
         '{"name":"a","version":"1.0.0","limits":{"call_timeout_ms":30001}}' '{"name":"a","version":"1.0.0","limits":{"stack_kb":8}}'
         "{\"name\":\"a\",\"version\":\"1.0.0\",\"description\":\"$(printf 'x%.0s' $(seq 201))\"}"
+        '{"name":"a","version":"1.0.0","settings":{}}' '{"name":"a","version":"1.0.0","settings":[{"type":"int"}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"float"}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"_a","type":"int"}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"abcdefghijklmnop","type":"int"}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"int"},{"key":"a","type":"int"}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"int","x":1}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"string","secret":true,"default":"x"}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"int","default":2147483648}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"int","default":"1"}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"bool","default":0}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"string","default":""}]}'
+        '{"name":"a","version":"1.0.0","settings":[{"key":"a","type":"int"},{"key":"b","type":"int"},{"key":"c","type":"int"},{"key":"d","type":"int"},{"key":"e","type":"int"},{"key":"f","type":"int"},{"key":"g","type":"int"},{"key":"h","type":"int"},{"key":"i","type":"int"}]}'
     )
     for m in "${good[@]}"; do
         echo "$m" > "$tmp/manifest.json"
