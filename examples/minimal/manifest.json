@@ -1,6 +1,7 @@
 {
   "name": "minimal",
   "version": "1.0.0",
+  "api": 1,
   "description": "SDK example: one tool, minimal_ping, that returns \"pong\".",
   "limits": {
     "memory_kb": 64,

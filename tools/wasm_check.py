@@ -6,10 +6,11 @@
   wasm_check.py <build_dir>     build_dir holds app.wasm and manifest.json (build-app.sh output)
 
 Checks: wasm magic/version and size (<= 256 KB, CAP_WASM_WASM_MAX); every import is a function from
-module "claw" declared in include/claw.h, and its permission is granted by the manifest (mirrors
-cap_wasm_host_import_perm() in esp-claw cap_wasm_host.c); exports app_init/app_alloc/tool_call with
-the right signatures, and on_timer with permission "timer"; no __heap_base/__data_end/__stack_pointer export; exactly one memory, not
-imported, with initial == maximum == limits.memory_kb. No dependencies besides Python 3.
+module "claw" declared in include/claw.h, its permission is granted by the manifest and it is not
+newer than the manifest's "api" (mirrors cap_wasm_host_import_perm() in esp-claw cap_wasm_host.c);
+exports app_init/app_alloc/tool_call with the right signatures, and on_timer with permission "timer";
+no __heap_base/__data_end/__stack_pointer export; exactly one memory, not imported, with
+initial == maximum == limits.memory_kb. No dependencies besides Python 3.
 """
 import json
 import os
@@ -25,6 +26,8 @@ FORBIDDEN_EXPORTS = {"__heap_base", "__data_end", "__stack_pointer"}
 IMPORT_PERMS = {"log": "log", "kv_get": "kv", "kv_set": "kv", "kv_del": "kv", "confirm": "confirm",
                 "ping": "ping", "http_profile_request": "http_profiles", "http_response_read": "http_profiles",
                 "timer_set": "timer", "notify": "notify"}
+# Host function -> the api version that added it; functions not listed exist since api 1.
+IMPORT_API = {"time_utc": 2}
 TIMER_EXPORT = ("on_timer", ((), ()))
 KINDS = {0: "function", 1: "table", 2: "memory", 3: "global", 4: "tag"}
 
@@ -108,11 +111,13 @@ def parse(data):
 
 
 def header_imports(path):
+    """The host functions claw.h declares and its CLAW_API_VERSION."""
     with open(path, encoding="utf-8") as f:
-        return set(re.findall(r'CLAW_IMPORT\("([a-z_]+)"\)', f.read()))
+        text = f.read()
+    return set(re.findall(r'CLAW_IMPORT\("([a-z_]+)"\)', text)), int(re.search(r"CLAW_API_VERSION (\d+)", text).group(1))
 
 
-def check(data, manifest, declared):
+def check(data, manifest, declared, api_version):
     errors = []
     if len(data) > WASM_MAX:
         errors.append(f"app.wasm is {len(data)} bytes, the limit is {WASM_MAX}")
@@ -123,6 +128,10 @@ def check(data, manifest, declared):
     perms = manifest.get("permissions") or {}
     granted = {k for k, v in perms.items() if v is True} | ({"http_profiles"} if perms.get("http_profiles") else set())
     granted |= {"timer"} if isinstance(perms.get("timer"), dict) else set()
+    api = manifest.get("api")
+    if isinstance(api, bool) or not isinstance(api, int) or not 1 <= api <= api_version:
+        errors.append(f"manifest api must be an integer in [1, {api_version}] (claw.h is api {api_version})")
+        api = api_version
 
     func_types = []
     for mod, field, kind, desc in m["imports"]:
@@ -133,6 +142,8 @@ def check(data, manifest, declared):
             errors.append(f"{where}: imports a {KINDS.get(kind, kind)}, only functions are allowed")
         elif field not in declared:
             errors.append(f"{where}: not a host function declared in claw.h")
+        elif IMPORT_API.get(field, 1) > api:
+            errors.append(f"{where}: needs api {IMPORT_API[field]}, but the manifest declares api {api}")
         elif IMPORT_PERMS.get(field, "") and IMPORT_PERMS[field] not in granted:
             errors.append(f"{where}: needs permission '{IMPORT_PERMS[field]}', which the manifest does not grant")
         if kind == 0:
@@ -176,7 +187,7 @@ def main():
         data = f.read()
     with open(os.path.join(build, "manifest.json"), encoding="utf-8") as f:
         manifest = json.load(f)
-    errors = check(data, manifest, header_imports(HEADER))
+    errors = check(data, manifest, *header_imports(HEADER))
     for e in errors:
         print(f"{build}/app.wasm: {e}", file=sys.stderr)
     if errors:

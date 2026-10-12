@@ -20,6 +20,7 @@ import re
 import sys
 
 MANIFEST_MAX = 4096          # CAP_WASM_MANIFEST_MAX (package entry limit)
+API_VERSION = 2              # CLAW_API_VERSION in include/claw.h = CAP_WASM_API_VERSION of the current firmware
 NAME_MAX = 24                # CAP_WASM_APP_NAME_MAX
 VERSION_MAX = 16             # CAP_WASM_VERSION_MAX
 DESC_MAX = 200               # CAP_WASM_DESC_MAX (bytes)
@@ -33,7 +34,7 @@ SETTING_DEFAULT_MAX = 64     # CAP_WASM_SETTING_DEFAULT_MAX (bytes)
 SETTING_DESC_MAX = 100       # CAP_WASM_SETTING_DESC_MAX (bytes)
 INT32 = (-2**31, 2**31 - 1)
 
-KEYS = {"name", "version", "description", "permissions", "limits", "settings"}
+KEYS = {"name", "version", "api", "description", "permissions", "limits", "settings"}
 BOOL_PERMS = {"log", "kv", "confirm", "ping", "notify"}
 PERMS = BOOL_PERMS | {"http_profiles", "timer"}
 TIMER_MIN_S = (60, 7 * 24 * 3600)  # CAP_WASM_TIMER_MIN_S .. CAP_WASM_TIMER_MAX_S
@@ -106,6 +107,12 @@ def check(manifest, dir_name=None):
             errors.append(f"{field} must be a string of {'' if required else '0/'}1-{limit} bytes")
 
     name, version = manifest.get("name"), manifest.get("version")
+    # The firmware reads a missing api as 1 but refuses it in a format 2 package; the SDK requires it.
+    api = manifest.get("api")
+    if api is None:
+        errors.append("api is required: the claw.h API version the app was built for (1 or 2; the lowest it needs)")
+    elif not is_int(api) or not 1 <= api <= API_VERSION:
+        errors.append(f"api must be an integer in [1, {API_VERSION}]")
     if isinstance(name, str) and name and not NAME_RE.match(name):
         errors.append(f"name must be 1-{NAME_MAX} chars of [a-z0-9_] starting with a letter")
     if dir_name is not None and name != dir_name:

@@ -4,9 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 /*
- * esp-claw WASM app SDK, host API v1 (import module "claw").
+ * esp-claw WASM app SDK, host API v2 (import module "claw"; CLAW_API_VERSION).
  *
  * Freestanding C: no libc, no WASI. Build with apps/build.sh (clang --target=wasm32).
+ *
+ * manifest.json declares "api": the lowest API version whose functions the app imports (1 for
+ * everything below marked api 1, 2 for claw_time_utc()). The device refuses an app whose api is
+ * above the one it implements, and an app that imports a function newer than its declared api.
  *
  * An app exports three functions:
  *   void     app_init(void)                                  register tools here (budget 2 s)
@@ -27,6 +31,8 @@
 #define CLAW_H
 
 #include <stdint.h>
+
+#define CLAW_API_VERSION 2
 
 #define CLAW_IMPORT(name) __attribute__((import_module("claw"), import_name(name)))
 #define CLAW_EXPORT(name) __attribute__((export_name(name)))
@@ -120,6 +126,28 @@ CLAW_IMPORT("now_ms") int64_t claw_now_ms(void);
 
 /* Fills buf with hardware random bytes. */
 CLAW_IMPORT("random") int32_t claw_random(void *buf, uint32_t len);
+
+/* api 2, no permission. Wall time with its quality: writes u64 little-endian unix milliseconds
+ * followed by u8 quality (claw_time_t) into out (out_cap >= 9) and returns 0, or CLAW_TIME_UNKNOWN
+ * (-1) when the device clock was never set (quality CLAW_TIME_NONE, unix_ms meaningless).
+ * -CLAW_EINVAL when out_cap is too small. Use it instead of claw_now_ms() when it matters whether
+ * the time is real. */
+#define CLAW_TIME_NONE          0 /* the wall clock was never set */
+#define CLAW_TIME_SYNCED        1 /* set by SNTP or restored from the RTC */
+#define CLAW_TIME_AUTHENTICATED 2 /* signed time (not produced by esp-claw; other hosts may) */
+#define CLAW_TIME_UNKNOWN       (-1)
+
+typedef struct {
+    uint64_t unix_ms;
+    uint8_t quality;
+} claw_time_t;
+
+CLAW_IMPORT("time_utc") int32_t claw_time_utc(void *out, uint32_t out_cap);
+
+static inline int32_t claw_time_get(claw_time_t *t)
+{
+    return claw_time_utc(t, sizeof(*t));
+}
 
 /* ---- helpers ---- */
 
