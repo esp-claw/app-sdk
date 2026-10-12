@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Writes tests/ecapp_vectors.json: a deterministic test key, a format 2 signature record and an update
 index with their Ed25519 signatures, computed with tools/ecapp.py. The firmware's host tests
-(esp-claw, cap_wasm_apps/test/host/ecapp_vectors.json) and rust-claw use the same file; the output is
+(esp-claw, cap_wasm_apps/test/host/ecapp_vectors.json) use the same file; the output is
 reproducible, so `make_vectors.py --check` verifies the committed copy. The key is public test data.
 """
 import base64

@@ -157,7 +157,7 @@ Nothing is repeated in `signature.json`: `sig` signs a fixed binary record that 
 | 18+N+V | 32 | SHA-256 of the `manifest.json` bytes |
 | 50+N+V | 32 | SHA-256 of the `app.wasm` bytes |
 
-At most 122 bytes. The manifest must declare `api`. `tests/ecapp_vectors.json` holds a test key (seed `sha256("ecapp test key, not a secret")`, key_id `490d27f5`), the record for name `hello`, version `1.2.3`, api 2, `manifest.json` `{"name":"hello","version":"1.2.3","api":2}` and an 8-byte `app.wasm` header, as hex, with the Ed25519 signature; the firmware's host tests (`cap_wasm_apps/test/host/ecapp_vectors.json`) and rust-claw check the same bytes. `tests/make_vectors.py --check` proves the file matches `ecapp.py`.
+At most 122 bytes. The manifest must declare `api`. `tests/ecapp_vectors.json` holds a test key (seed `sha256("ecapp test key, not a secret")`, key_id `490d27f5`), the record for name `hello`, version `1.2.3`, api 2, `manifest.json` `{"name":"hello","version":"1.2.3","api":2}` and an 8-byte `app.wasm` header, as hex, with the Ed25519 signature; the firmware's host tests (`cap_wasm_apps/test/host/ecapp_vectors.json`) check the same bytes. `tests/make_vectors.py --check` proves the file matches `ecapp.py`.
 
 #### Format 1 (still accepted)
 
