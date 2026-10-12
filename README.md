@@ -3,15 +3,17 @@
 SDK for esp-claw WASM apps: sandboxed modules that add LLM tools to the device. The runtime lives in the firmware, [esp-claw/esp-claw](https://github.com/esp-claw/esp-claw), component `cap_wasm_apps` (WAMR interpreter). Each app has its own linear memory, a time budget per call, and only the host functions its manifest grants.
 
 ```
-include/claw.h            host API v1 (import module "claw") + helper macros
+include/claw.h            host API v2 (import module "claw") + helper macros
 include/claw_util.h       optional output buffer and minimal JSON reader (header-only, freestanding)
 build-app.sh              builds <app>/build/{app.wasm,manifest.json}
-tools/ecapp.py            packs, signs and verifies .ecapp packages; prints public keys
+tools/ecapp.py            packs, signs and verifies .ecapp packages; writes signed update indexes; prints public keys
 tools/manifest_check.py   checks manifest.json against the firmware's rules
-tools/wasm_check.py       checks a built app.wasm: imports, exports, memory, size
+tools/wasm_check.py       checks a built app.wasm: imports (permissions, api), exports, memory, size
 tools/device_test.sh      install/update/remove test steps for a flashed device (signed packages)
 examples/minimal/         smallest app: one tool, minimal_ping, returns "pong"
 tests/selftest.sh         SDK self-test (run by CI)
+tests/ecapp_vectors.json  test key, signature record and index vectors shared with the firmware's host tests
+tests/make_vectors.py     regenerates (or --check verifies) ecapp_vectors.json
 .github/workflows/app-build.yml   reusable build + check workflow for app repositories
 ```
 
@@ -51,6 +53,10 @@ An app with permission `timer` exports `void on_timer(void)` and starts its time
 
 `on_timer()` has no Telegram chat: `claw_confirm()` returns `-CLAW_ENOTSUP` and HTTP mutations (which need a confirmation) are refused. To tell the user something, use permission `notify` and `claw_notify(text)`: it sends `` 📣 App `<name>`: <text> `` to the device's allowed Telegram users, at most 10 messages per hour per app.
 
+### Time
+
+`claw_now_ms()` returns the device clock in unix milliseconds, but gives no hint whether that clock was ever set. `claw_time_utc()` (api 2, no permission) fills a `claw_time_t` {`uint64_t unix_ms`, `uint8_t quality`} and returns 0, or `CLAW_TIME_UNKNOWN` (-1) when the wall clock was never set. The device writes 9 bytes: u64 little-endian unix milliseconds, then the quality: `CLAW_TIME_NONE` (0, never set), `CLAW_TIME_SYNCED` (1, SNTP or RTC) or `CLAW_TIME_AUTHENTICATED` (2, signed time; esp-claw never produces it, other hosts of this API may). Use it for anything where a wrong date matters (expiry checks, timestamps you store).
+
 The LLM sees each tool as `<app>_<tool>` in the capability group `cap_wasm_apps`. That group is LLM-visible by default. If `llm_visible_cap_groups` is set explicitly, add `cap_wasm_apps` to it. Tool names are at most 48 chars including the prefix, and the device allows at most 32 app tools in total.
 
 ## manifest.json
@@ -59,6 +65,7 @@ The LLM sees each tool as `<app>_<tool>` in the capability group `cap_wasm_apps`
 {
   "name": "cf",
   "version": "1.0.0",
+  "api": 2,
   "description": "shown in /apps and apps_status",
   "permissions": { "log": true, "kv": true, "http_profiles": ["cloudflare"], "confirm": true, "ping": true },
   "limits": { "memory_kb": 64, "call_timeout_ms": 5000 },
@@ -73,6 +80,7 @@ The LLM sees each tool as `<app>_<tool>` in the capability group `cap_wasm_apps`
 |---|---|
 | `name` | required, 1-24 chars `[a-z0-9_]`, starts with a letter; the app's directory on the device (`apps/<name>/`) and its tool prefix |
 | `version` | required, 1-16 chars, `MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]` |
+| `api` | required, 1-65535: the `claw.h` host API version the app needs (`CLAW_API_VERSION` is 2; declare the lowest version whose functions you import, 1 unless you use `claw_time_utc()`). Signed as part of the package. The device refuses an app whose api is above what it implements ("needs claw api N, firmware has M") and one that imports a function newer than its api |
 | `description` | optional, <= 200 bytes |
 | `permissions.log` / `kv` / `confirm` / `ping` / `notify` | optional booleans, default false |
 | `permissions.timer` | optional object `{"min_interval_s": N}`, N 60-604800 (default 60); requires the export `on_timer` |
@@ -107,9 +115,11 @@ The device rejects an app with unknown keys or permissions. It also rejects an a
 
 ## Versioning
 
-Versions follow semver ordering: `1.2.0 < 1.10.0`, and `1.0.0-rc.1 < 1.0.0`. Build metadata (`+…`) does not affect the order. The device refuses to install a lower version than the installed one unless you pass `--force`. Bump `version` in `manifest.json` for every release, and tag the release `v<version>`. The reusable workflow refuses to attach files to a release whose tag does not match.
+Versions follow semver ordering: `1.2.0 < 1.10.0`, and `1.0.0-rc.1 < 1.0.0`. Build metadata (`+…`) does not affect the order. Bump `version` in `manifest.json` for every release, and tag the release `v<version>`. The reusable workflow refuses to attach files to a release whose tag does not match.
 
-`claw.h` is host API v1, and packages declare `"sdk": 1` in `signature.json`. A firmware that does not support an app's SDK version refuses to install it.
+The device keeps a per-app **version floor**: the highest version it ever installed, also after `/app remove`. It refuses to install a version below the installed one or below the floor (anti-rollback: an old, signed package with a known bug cannot be pushed back onto a device) unless the user passes `--allow-downgrade`, which is confirmed with a button that says "Downgrade". After such an install the floor is the downgraded version.
+
+`claw.h` is host API v2 (`CLAW_API_VERSION`); the manifest's `api` says which version an app needs. `signature.json`'s `"sdk"` is the package format (2, or 1 for older firmware), see below.
 
 ## Packages and signing
 
@@ -118,13 +128,38 @@ The device installs `.ecapp` packages. A package must be signed by a key listed 
 ```sh
 openssl genpkey -algorithm ed25519 -out key.pem                     # once; never commit it
 python3 sdk/tools/ecapp.py pubkey key.pem                           # base64 key + key_id for app_trusted_keys
-python3 sdk/tools/ecapp.py pack build --key key.pem                 # -> build/<name>-<version>.ecapp
+python3 sdk/tools/ecapp.py pack build --key key.pem                 # -> build/<name>-<version>.ecapp (format 2)
+python3 sdk/tools/ecapp.py pack build --key key.pem --format 1      # for firmware that predates format 2
 python3 sdk/tools/ecapp.py verify build/<name>-<version>.ecapp --pub <base64>
 ```
 
 `ecapp.py` uses the `cryptography` package if it is installed and falls back to `openssl` (3.x) otherwise. The private key is only read to sign.
 
-An `.ecapp` starts with `"ECAP"`, u8 format 1, u8 entry count 3 and u16 0. Each entry follows as u8 name length, name, u32 little-endian length, data. The entries are `manifest.json`, `app.wasm` and `signature.json`, at most 4 KB, 256 KB and 1 KB, and 512 KB in total. `signature.json`:
+An `.ecapp` starts with `"ECAP"`, u8 format (2, or 1), u8 entry count 3 and u16 0. Each entry follows as u8 name length, name, u32 little-endian length, data. The entries are `manifest.json`, `app.wasm` and `signature.json`, at most 4 KB, 256 KB and 1 KB, and 512 KB in total. The format byte and `signature.json`'s `sdk` are the same number and must agree.
+
+#### Format 2 (default)
+
+```json
+{"alg":"ed25519","key_id":"<first 8 hex of sha256(public key)>","sdk":2,"sig":"<base64 Ed25519 signature>"}
+```
+
+Nothing is repeated in `signature.json`: `sig` signs a fixed binary record that the device rebuilds from the manifest and the entry bytes, so there is no JSON canonicalization to get byte-exact on either side:
+
+| offset | size | value |
+|---|---|---|
+| 0 | 13 | `ecapp-sig-v2` followed by one NUL byte (domain separation) |
+| 13 | 1 | u8 format = 2 |
+| 14 | 2 | u16 little-endian `api` from the manifest |
+| 16 | 1 | u8 name length N (1-24) |
+| 17 | N | `name` as in the manifest, no NUL |
+| 17+N | 1 | u8 version length V (1-16) |
+| 18+N | V | `version` as in the manifest, no NUL |
+| 18+N+V | 32 | SHA-256 of the `manifest.json` bytes |
+| 50+N+V | 32 | SHA-256 of the `app.wasm` bytes |
+
+At most 122 bytes. The manifest must declare `api`. `tests/ecapp_vectors.json` holds a test key (seed `sha256("ecapp test key, not a secret")`, key_id `490d27f5`), the record for name `hello`, version `1.2.3`, api 2, `manifest.json` `{"name":"hello","version":"1.2.3","api":2}` and an 8-byte `app.wasm` header, as hex, with the Ed25519 signature; the firmware's host tests (`cap_wasm_apps/test/host/ecapp_vectors.json`) and rust-claw check the same bytes. `tests/make_vectors.py --check` proves the file matches `ecapp.py`.
+
+#### Format 1 (still accepted)
 
 ```json
 {"alg":"ed25519","key_id":"<first 8 hex of sha256(public key)>","sdk":1,
@@ -132,13 +167,9 @@ An `.ecapp` starts with `"ECAP"`, u8 format 1, u8 entry count 3 and u16 0. Each 
  "sig":"<base64 Ed25519 signature>"}
 ```
 
-`sig` signs the canonical bytes of `signed`: the keys in exactly that order, no whitespace, lowercase hex. On install and on every load, the device checks:
-- the format
-- `sdk`
-- name and version against the manifest
-- both hashes
-- that `key_id` is trusted
-- the signature
+`sig` signs the canonical bytes of `signed`: the keys in exactly that order, no whitespace, lowercase hex. A manifest without `api` is read as api 1.
+
+On install and on every load, the device checks the format, `sdk`, the manifest's `api` against what it implements, (format 1) name, version and both hashes against the manifest and the bytes, that `key_id` is trusted for this app name, and the signature.
 
 ### Trusted keys
 
@@ -150,6 +181,8 @@ XHQYDdKaRZ6pNzXYcrGAB8bTyPa3D22NU+lVzAt2Acw=   key_id 7087d6a8
 
 To trust it, set `app_trusted_keys` to `["XHQYDdKaRZ6pNzXYcrGAB8bTyPa3D22NU+lVzAt2Acw="]`. To also trust your own key, add it to the array (at most 8 keys).
 
+A key can be **scoped** to app names: `{"key":"<base64>","apps":["cf","hello"]}` trusts it only for apps whose name starts with one of the 1-4 prefixes. A package, or an update index entry, for any other app signed by it is refused, and a scoped key never verifies a firmware image. Use this for a key that signs one app, so that a leaked key cannot replace the others.
+
 ## Releasing an app
 
 The [reusable workflow](.github/workflows/app-build.yml) builds and checks every push and pull request. When a release is published, it attaches `app.wasm` and `manifest.json` to the release. Only that attach job gets `contents: write`, and only on release events; the build itself runs with a read-only token. CI never signs. A maintainer signs the CI-built files locally and uploads the package:
@@ -160,8 +193,23 @@ gh release create "v$v" --generate-notes                   # CI attaches app.was
 gh release download "v$v" -p app.wasm -p manifest.json -D dist   # once the workflow has finished
 python3 sdk/tools/ecapp.py pack dist --key /path/to/key.pem      # -> dist/<name>-$v.ecapp
 python3 sdk/tools/ecapp.py verify dist/<name>-$v.ecapp --pub XHQYDdKaRZ6pNzXYcrGAB8bTyPa3D22NU+lVzAt2Acw=
-gh release upload "v$v" dist/<name>-$v.ecapp
+python3 sdk/tools/ecapp.py index dist --key /path/to/key.pem \                 # indexes the *.ecapp files
+    --base-url "https://github.com/<owner>/<repo>/releases/download/v$v"   # -> dist/index.json + index.sig
+gh release upload "v$v" dist/<name>-$v.ecapp dist/index.json dist/index.sig
 ```
+
+### Update index
+
+Devices do not ask the GitHub API which release is the latest: that answer is unsigned, so anyone in the path could hide new releases (a freeze attack) or offer a different package. Instead every release carries `index.json` and `index.sig`, and the device reads them from `releases/latest/download/` (for an app installed from any other https URL: from the package's directory).
+
+`index.json` is `{"format":1,"issued":<unix>,"expires":<unix>,"apps":[{"name","version","url","sha256","size"},...]}` (at most 8 KB). `index.sig` is `{"alg":"ed25519","key_id":"<8 hex>","expires":<unix>,"sig":"<base64>"}` where `sig` signs `"ecapp-index-v1"` + NUL (15 bytes) + SHA-256 of the `index.json` bytes exactly as served (32 bytes) + u64 little-endian `expires` (8 bytes). The `expires` inside `index.json` must equal the signed one. The device refuses an index that
+
+- is not signed by a trusted key (a scoped key only for the entries inside its scope),
+- has expired (`--days`, default 90: re-run `ecapp.py index` and upload the two files again before then, even without a new release),
+- was issued before the last index it accepted for that app (a replayed old index),
+- or cannot be judged because the device clock is not synced: "clock not synced, cannot verify index freshness".
+
+The package named by the entry must then match the entry's `size` and `sha256`, and its manifest the entry's `version`, before the usual signature and version checks. `ecapp.py index-verify <dir> --pub <base64> [--now <unix>] [--name <app>]` checks the two files the way the device does; `tests/ecapp_vectors.json` holds a signed example index.
 
 ### Reusable workflow versions
 
@@ -175,7 +223,7 @@ jobs:
       contents: write
 ```
 
-`v1` is a moving tag. Maintainers move it to a newer commit on `main` only after CI on that commit is green:
+`v1` is a moving tag. Maintainers move it to a newer commit on `main` only after CI on that commit is green. The `api` manifest key is a stricter check that existing apps fail until they add it, so the commit that introduced it belongs to a new major tag `v2`:
 
 ```sh
 git tag -f v1 <commit> && git push -f origin v1
@@ -189,8 +237,9 @@ Host the `.ecapp` on any https URL, for example a GitHub release, then send in T
 
 ```
 /app install <https-url>            download (<= 512 KB), verify, confirm, install
-/app install --force <https-url>    same, but allows a lower version than installed
-/app update <name> [https-url]      update; without a URL, from where it was installed
+/app install --allow-downgrade <https-url>   same, but allows a version below the installed one or
+                                    the anti-rollback floor (confirmed with a "Downgrade" button)
+/app update <name> [https-url]      update from the signed index of where it was installed, or from a URL
 /app remove <name>                  delete the app, its files, key-value data and settings
 /app config <name> [<key> <value>|<key> --reset]   list or change the app's settings
 /apps                               list: version, state, key, PSRAM, last use, tools, last error
